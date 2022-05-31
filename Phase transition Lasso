@@ -277,7 +277,7 @@ def experiments_phase_Lasso(amount_experiments: int, p_value: int, reg_value: in
 
 amount_experiments = 1   # the number of experiments we want to try. The algorithm will display the average of all the experiments
 p_value = 1000           # number of columns for the matrix
-reg_value = 10           # the size of the support regressor 
+reg_value = 10           # size of the support of the regressor 
 
 
 # inputs for the range of the size of rows for the matrices 

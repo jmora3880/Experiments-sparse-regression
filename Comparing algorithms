@@ -1,0 +1,946 @@
+from gurobipy import *
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+import copy
+import pandas as pd
+import time
+import xlsxwriter
+import random
+from openpyxl import load_workbook
+
+
+#################### Inputs for the algorithm ######################
+
+amount_warm_start_options = 20     # the number of warm starts we calculate using the discrete firs-ordered algorithms (ate the end the best warm start is used in the cp and best subset algorithm)
+time_limit_warm_start = 120        # The time limit for the discrete firs-ordered algorithm   
+amount_experiments = 1             # the number of experiments (the results display in the bar figure are the average results of all the experiments)
+p_value = 1000                     # number of columns for the matrix
+reg_value = 10                     # size of the support of the regressor
+n_value = 300                      # number of rows for the matrix
+
+folder_path = r'D:\presentaciondata\Comparing' #The folder path where the image and the data are storaged (the folder needs to be already created before running the algorithm)
+
+####################################################################
+
+def matriz_generator(p: int,reg: int, n: int,number_experiment: int):
+
+       # función que centra y escala matrices
+    def function_center_scale(z: np.ndarray) -> np.ndarray:
+        Size = z.shape 
+        if np.size(Size) == 1:
+            media = np.sum(z)/Size[0]
+            for i in range(Size[0]):
+                z[i] = z[i] - media
+            scala = np.linalg.norm(z,2)
+            for i in range(Size[0]):
+                z[i] = z[i]/scala
+        else:
+            for i in range(Size[1]):
+                media = np.sum(z[:,i])/Size[0]
+                for j in range(Size[0]):
+                    z[j,i] = z[j,i] - media
+                scala = np.linalg.norm(z[:,i],2)
+                for j in range(Size[0]):
+                    z[j,i] = z[j,i]/scala
+
+        return z
+
+    def least_square(z: np.ndarray):
+        
+        return np.inner(Y-diccionario.dot(z),Y-diccionario.dot(z))
+
+
+    # Función que selecciona aleatoriamente 'k' columnas y genera vector como combinación lineal (binaria) de estos
+    def respond_vector_generator(X: np.ndarray, k: int) -> np.ndarray:
+        Size = X.shape
+        dim_colums = Size[1]
+        indice_colums_selected = random.sample(range(dim_colums),k)
+        respond_vector = sum(random.choice([-1,1])*X[:,indice_colums_selected[i]] for i in range(k))
+        return respond_vector, indice_colums_selected, k
+
+    def gred(z):         #resuelve el problema de optimización de la función g reducido al soporte del vector z
+        soporte_columnas = [i for i in range(p) if z[i] != 0.0]; #selecciona columnas para formar X_s (notación paper Bertsimas)
+
+        matriz_columnas_soporte = np.empty((n,len(soporte_columnas)), dtype = 'float', order='C')
+
+        for i in range(len(soporte_columnas)):
+            matriz_columnas_soporte[:,i] = diccionario[:,soporte_columnas[i]]    # X_s
+
+        zz = np.linalg.solve(matriz_columnas_soporte.transpose().dot(matriz_columnas_soporte), matriz_columnas_soporte.transpose().dot(Y))
+        beta_goal = np.array([0]*len(z), dtype= 'float64')    #según paper de Bertsimas (best subset selection)
+        tt = 0
+        for i in soporte_columnas:
+            beta_goal[i] = zz[tt]
+            tt += 1
+        
+        return beta_goal
+
+    def H(k,z):    # función que devuelve un vector que contiene solo las k entradas mayores de z (en valor absoluto) y anula el resto
+        
+        if type(k) != int or k < 1:
+            bb = 'k tiene que ser entero mayor a 0'
+        else:
+            I = []   # conjunto de índices
+
+        zz = copy.copy(z)
+
+        for i in range(len(z)):
+            if z[i] < 0:
+                zz[i] = -z[i]
+
+            for i in range(k):  #vamos a sacar los k índices con las entradas más altas
+                F = max(zz) #máximo actual
+
+                for j in range(len(z)):
+
+                        if zz[j] == F:
+                            I.append(j)  #añade nuevo índice
+                            zz[j] = 0    #cambia 
+                            break
+
+                bb = [0]*(len(z))   #vector respuesta
+
+            for i in I:
+                bb[i] = z[i]     # vector que solo guarda los valores de los índices hallados antes
+
+
+            return bb
+
+    def gradg(z):
+        
+        return -diccionario.transpose().dot(Y-diccionario.dot(np.array(z)))                     # gradiente
+
+
+
+
+    diccionario = np.empty((n,p),dtype='float')
+
+    diccionario = np.random.rand(n,p)
+    diccionario = function_center_scale(diccionario)
+    data_random = respond_vector_generator(diccionario,reg)
+    Y = data_random[0]                                 #generación del vector Y
+
+    #indices_selected.append(data_random[1])
+
+    l = np.linalg.norm(diccionario, 2)**2  #parámetro
+
+    L = math.ceil(l + 0)
+
+    epsilon_first_order = 1/10**4   #parámetro de error 
+
+    time_warm_start = 0
+
+    ss = np.zeros(p)
+
+    for _ in range(amount_warm_start_options):
+
+        
+
+        start_warm = time.time()
+
+        beta = {}
+
+        beta['0'] = [1]*p
+
+        beta['1'] = [0]*p
+
+        lista_aleatoria = random.sample(range(p), reg)
+        for i in lista_aleatoria:
+            beta['1'][i] = random.randint(1, 10**1)
+
+        #print(lista_aleatoria)
+            
+
+        t = 1
+            
+        while np.linalg.norm(np.array(beta[str(t)])-np.array(beta[str(t-1)])) > epsilon_first_order:
+            
+            t += 1
+            beta[str(t)] = H(reg,np.array(beta[str(t-1)])-(1/L)*gradg(beta[str(t-1)]))
+            if t == 5000:
+                break
+            if time.time() - start_warm > time_limit_warm_start:
+                break
+
+
+
+            
+        #print('número de iteraciones: '+str(t))
+
+        beta_final = gred(beta[str(t)])        
+
+        #for i in range(p):
+            #if beta_final[i] != 0.0:
+                #print(i)
+                #print(beta_final[i])
+        time_warm_up_temporal_iteration = time.time() - start_warm 
+
+        if least_square(beta_final) < least_square(ss):
+            ss = np.array([beta_final[k] for k in range(p)])
+            time_warm_start = time_warm_up_temporal_iteration
+
+    reg_and_time_warm_start = np.array([reg, time_warm_start])
+
+
+    np.save(folder_path+r'\matrix '+str(number_experiment+1),diccionario)
+    np.save(folder_path+r'\respond_vector '+str(number_experiment+1),Y)
+    np.save(folder_path+r'\warm_start '+str(number_experiment+1),ss)
+    np.save(folder_path+r'\indices_selected '+str(number_experiment+1),data_random[1])
+    np.save(folder_path+r'\reg_and_time_warm_start '+str(number_experiment+1),reg_and_time_warm_start)
+
+
+
+
+for count in range(amount_experiments):
+    matriz_generator(p_value,reg_value,n_value,count)
+
+
+
+#####################################
+            #cp
+#####################################
+
+
+def cutting_plane_algorithm_comparing(diccionario: np.ndarray,reg: int, Y: np.ndarray, indices_selected: list, warm_start_information: np.ndarray , gamma_set: list, epsilon: float, time_limit_algorithm: float, number_experiment: int):
+    #limite_iteraciones = 1000
+    n = np.shape(diccionario)[0]
+    p = np.shape(diccionario)[1]
+
+    time_algorithm = 100
+    
+    
+    #función de pérdida de regresión 
+    def func(z):
+        K = sum(np.multiply(diccionario[:,i].transpose().dot(diccionario[:,i]),z[i]) for i in range(len(z)))
+        M = np.linalg.inv(np.identity(n)+np.multiply(K,gamma))
+        
+        return np.multiply(Y.dot(M).dot(Y.transpose()),1/2)
+
+
+    #función de pérdida de regresión optima
+
+    def lossc_caso_grande(z):
+        indices_colums_selected = [diccionario[:,i] for i in range(p) if z[i] != 0.0]; #selecciona columnas para formar X_s (notación paper Bertsimas)
+        X = np.vstack(indices_colums_selected); #transpuesta de X_s
+        alpha = Y-X.transpose().dot(np.linalg.inv(np.multiply(np.identity(len(indices_colums_selected)),1/gamma)+X.dot(X.transpose()))).dot(X).dot(Y)
+        return (1/2)*(Y.transpose().dot(alpha))
+
+
+        
+    #construcción gradiente 2
+
+    def grad(z):
+        LL = [diccionario[:,i] for i in range(p) if z[i] != 0.0]; #selecciona columnas para formar X_s (notación paper Bertsimas)
+        XX = np.vstack(LL); #transpuesta de X_s
+        alpha1 = Y-XX.transpose().dot(np.linalg.inv(np.multiply(np.identity(len(LL)),1/gamma)+XX.dot(XX.transpose()))).dot(XX).dot(Y)
+        c = np.array([0]*p, dtype = 'float64') #vector gradiente
+        for j in range(p):
+            c[j] = (-gamma/2)*(diccionario[:,j].dot(alpha1))**2
+        
+        return c
+
+    def gradg(z):
+        
+        return -diccionario.transpose().dot(Y-diccionario.dot(np.array(z)))                     # gradiente
+
+    def H(k,z):    # función que devuelve un vector que contiene solo las k entradas mayores de z (en valor absoluto) y anula el resto
+        
+        if type(k) != int or k < 1:
+            bb = 'k tiene que ser entero mayor a 0'
+        else:
+            I = []   # conjunto de índices
+
+        zz = copy.copy(z)
+
+        for i in range(len(z)):
+            if z[i] < 0:
+                zz[i] = -z[i]
+
+            for i in range(k):  #vamos a sacar los k índices con las entradas más altas
+                F = max(zz) #máximo actual
+
+                for j in range(len(z)):
+
+                        if zz[j] == F:
+                            I.append(j)  #añade nuevo índice
+                            zz[j] = 0    #cambia 
+                            break
+
+                bb = [0]*(len(z))   #vector respuesta
+
+            for i in I:
+                bb[i] = z[i]     # vector que solo guarda los valores de los índices hallados antes
+
+
+            return bb
+
+    def gred(z):         #resuelve el problema de optimización de la función g reducido al soporte del vector z
+        soporte_columnas = [i for i in range(p) if z[i] != 0.0]; #selecciona columnas para formar X_s (notación paper Bertsimas)
+
+        matriz_columnas_soporte = np.empty((n,len(soporte_columnas)), dtype = 'float', order='C')
+
+        for i in range(len(soporte_columnas)):
+            matriz_columnas_soporte[:,i] = diccionario[:,soporte_columnas[i]]    # X_s
+
+        zz = np.linalg.solve(matriz_columnas_soporte.transpose().dot(matriz_columnas_soporte), matriz_columnas_soporte.transpose().dot(Y))
+        beta_goal = np.array([0]*len(z), dtype= 'float64')    #según paper de Bertsimas (best subset selection)
+        tt = 0
+        for i in soporte_columnas:
+            beta_goal[i] = zz[tt]
+            tt += 1
+        
+        return beta_goal
+
+    def least_square(z: np.ndarray):
+        
+        return np.inner(Y-diccionario.dot(z),Y-diccionario.dot(z))
+
+
+    #vector inicial
+
+    #Y = data_random[0]
+
+
+    accuracy = 0
+    indices_solution = []
+
+    
+
+    for gamma in gamma_set:
+    # modelo para sacar alpha para el warm start
+         # #modelo 3
+
+        s = {} # vectores respuesta (los s*)
+
+        y = {} # valores mínimos (los eta)
+
+        y['Y0'] = [0.0]
+
+        s['B0'] = ss #vector inicial
+
+
+        t_cutting_plane = 0 #número iteración
+
+
+
+        st = Model("Strassen") #nombre modelo
+        z = st.addMVar(p, vtype=GRB.BINARY) #variables binarias 
+        eta = st.addMVar(1, vtype=GRB.CONTINUOUS) #variable continua
+
+        st.Params.NumericFocus = 2
+
+        st.update()
+
+        st.setObjective(eta, GRB.MINIMIZE) #función objetivo 
+
+        # restricciones
+
+        st.addConstr(np.ones(p) @ z <= reg) #restricción 
+
+        start_cutting_plane = time.time()
+
+
+        while y['Y'+str(t_cutting_plane)][0] - lossc_caso_grande(s['B'+str(t_cutting_plane)]) < epsilon:
+            
+            constante = lossc_caso_grande(s['B'+str(t_cutting_plane)]) - grad(s['B'+str(t_cutting_plane)]).dot(np.array(s['B'+str(t_cutting_plane)])) 
+            
+            st.addConstr( grad(s['B'+str(t_cutting_plane)]) @ z + constante <= eta )
+            st.update()
+            st.optimize()
+            #running_time += st.runtime
+            print(st.status)
+            
+            t_cutting_plane += 1
+            print(t_cutting_plane)
+            s['B'+str(t_cutting_plane)] = z.x
+            y['Y'+str(t_cutting_plane)] = eta.x
+            if time.time() - start_cutting_plane > time_limit_algorithm:
+                break
+            indices_solution_temporal_testing = []
+            for i in range(p):
+                if s['B'+str(t_cutting_plane)][i] != 0.0:
+                    indices_solution_temporal_testing.append(i)
+            accuracy_temporal_testing = 100*len(set(indices_selected) & set(indices_solution_temporal_testing))/reg
+            if accuracy_temporal_testing == 100.0:
+                break
+
+
+
+            #if t_cutting_plane == limite_iteraciones: 
+                #break 
+
+        time_cutting_plane_temporal = time.time() - start_cutting_plane 
+
+
+        indices_solution_temporal = []
+        for i in range(p):
+            if s['B'+str(t_cutting_plane)][i] != 0.0:
+                indices_solution_temporal.append(i)
+        accuracy_temporal = 100*len(set(indices_selected) & set(indices_solution_temporal))/reg
+        if accuracy_temporal > accuracy:
+            accuracy = accuracy_temporal
+            gamma_selected = gamma
+            indices_solution = indices_solution_temporal
+            time_algorithm = time_cutting_plane_temporal
+
+        if accuracy_temporal == accuracy and time_cutting_plane_temporal < time_algorithm:
+            accuracy = accuracy_temporal
+            gamma_selected = gamma
+            indices_solution = indices_solution_temporal
+            time_algorithm = time_cutting_plane_temporal
+
+
+
+
+        def function_support(z: np.ndarray):
+            indices_list = []
+            for i in range(len(z)):
+                if z[i] != 0.0:
+                    indices_list.append(i)
+
+            return indices_list
+
+        
+    print(indices_solution)
+
+    print('valor gamma: '+str(gamma_selected))
+
+    path_data_file = folder_path+r'\com_cp_'+str(p_value)+'_'+str(reg_value)+'_'+str(n_value)+'.xlsx'
+    ExcelWorkbook = load_workbook(path_data_file)
+    writer = pd.ExcelWriter(path_data_file, engine = 'openpyxl')
+    writer.book = ExcelWorkbook
+    data_panda = pd.DataFrame({'n':n,'Accuracy C.P':accuracy, 'Time warm star':warm_start_information[1],'Time C.P':time_algorithm}, index=[0])    
+    data_panda.to_excel(writer, sheet_name = 'experiment '+str(number_experiment+1),index=False)
+    writer.save()
+    writer.close()
+
+    return accuracy, time_algorithm
+
+
+
+
+accuracy_list = []
+time_limit_list = []
+
+workbook = xlsxwriter.Workbook(folder_path+r'\com_cp_'+str(p_value)+'_'+str(reg_value)+'_'+str(n_value)+'.xlsx')
+workbook.close()
+
+for count in range(amount_experiments):
+    diccionario = np.load(folder_path+r'\matrix '+str(count+1)+'.npy')
+    Y = np.load(folder_path+r'\respond_vector '+str(count+1)+'.npy')
+    ss = np.load(folder_path+r'\warm_start '+str(count+1)+'.npy')
+    indices_selected = np.load(folder_path+r'\indices_selected '+str(count+1)+'.npy')
+    warm_start_information = np.load(folder_path+r'\reg_and_time_warm_start '+str(count+1)+'.npy')
+    reg = int(warm_start_information[0])
+    time_warm_start = warm_start_information[1]
+
+    n = np.shape(diccionario)[0]
+    p = np.shape(diccionario)[1]
+
+    constante = 1
+
+    gamma_steps = 10 
+    gamma_set = [2*g/(math.sqrt(n)*constante) for g in range(1,gamma_steps)]
+    answer = cutting_plane_algorithm_comparing(diccionario,reg, Y, indices_selected, warm_start_information,gamma_set,10**(-4),10,count)
+    
+    accuracy_list.append(answer[0])
+    time_limit_list.append(answer[1])
+    
+
+accuracy_average = sum(accuracy_list[i] for i in range(len(accuracy_list)))/len(accuracy_list)
+time_algorithm_average = sum(time_limit_list[i] for i in range(len(time_limit_list)))/len(time_limit_list)
+
+
+path_data_file_global = folder_path+r'\com_cp_'+str(p_value)+'_'+str(reg_value)+'_'+str(n_value)+'.xlsx'
+ExcelWorkbook = load_workbook(path_data_file_global)
+writer = pd.ExcelWriter(path_data_file_global, engine = 'openpyxl')
+writer.book = ExcelWorkbook
+data_panda_average = pd.DataFrame({'n':n,'Accuracy C.P':accuracy_average, 'Time C.P':time_algorithm_average}, index=[0])    
+data_panda_average.to_excel(writer, sheet_name = 'Average',index=False)
+writer.save()
+writer.close()
+
+
+#####################################
+            #Lasso
+#####################################
+def lasso_algorithm_comparing(diccionario: np.ndarray,reg: int, Y: np.ndarray, indices_selected: list, gamma_set: list,number_experiment: int):
+    n = np.shape(diccionario)[0]
+    p = np.shape(diccionario)[1]
+    
+    accuracy = 0
+    indices_solution = []
+    
+            #nombre modelo
+
+    for Lambda in gamma_set:
+
+        las = Model("Lasso")
+
+        #varibles
+        z = las.addMVar(p, lb=-GRB.INFINITY, vtype=GRB.CONTINUOUS)
+        t = las.addMVar(p, vtype=GRB.CONTINUOUS)
+
+        las.params.Method = 1
+        las.params.Threads = 1
+
+        las.update()
+
+        #Función objetivo
+
+        obj = MQuadExpr()
+
+        obj = z @ diccionario.transpose().dot(diccionario) @ z 
+
+        obj *= 1/2
+
+        obj -= Y.transpose().dot(diccionario) @ z
+
+        obj += np.array([Lambda for i in range(p)]) @ t
+
+        obj += 1/2*Y.dot(Y)
+
+        las.setObjective(obj, GRB.MINIMIZE)
+
+
+        #restricciones
+        las.addConstrs( z[i] <= t[i] for i in range(p))
+        las.addConstrs( -z[i] <= t[i] for i in range(p))
+            
+        #las.addConstr( np.ones(p) @ t <= MU)
+
+
+        # comando solución
+        las.update()
+        las.optimize()
+        print(las.status)
+        time_lasso_temporal = las.runtime
+
+        indices_solution_temporal = []
+        entry_solution = []
+        for i in range(p):
+            if z.x[i] != 0.0:
+                indices_solution_temporal.append(i)
+                entry_solution.append(z.x[i])
+        accuracy_temporal = 100*len(set(indices_selected) & set(indices_solution_temporal))/reg
+        false_accuracy_temporal = 100*len(set(indices_solution_temporal).difference(set(indices_selected)))/len(indices_solution_temporal)
+        if accuracy_temporal > accuracy: 
+            accuracy = accuracy_temporal
+            indices_solution = indices_solution_temporal
+            Lambda_selected = Lambda
+            time_lasso_algorithm = time_lasso_temporal
+            false_accuracy = false_accuracy_temporal
+
+        if accuracy_temporal == accuracy and false_accuracy_temporal < false_accuracy:
+            accuracy = accuracy_temporal
+            indices_solution = indices_solution_temporal
+            Lambda_selected = Lambda
+            time_lasso_algorithm = time_lasso_temporal
+            false_accuracy = false_accuracy_temporal
+
+
+    print(indices_solution)
+    print('valor lambda: '+str(Lambda_selected))
+
+
+    path_data_file = folder_path+r'\com_lasso_'+str(p)+'_'+str(reg)+'_'+str(n)+'.xlsx'
+    ExcelWorkbook = load_workbook(path_data_file)
+    writer = pd.ExcelWriter(path_data_file, engine = 'openpyxl')
+    writer.book = ExcelWorkbook
+    data_panda = pd.DataFrame({'n':n,'Accuracy Lasso':accuracy, 'False Accuracy Lasso':false_accuracy,'Time Lasso':time_lasso_algorithm}, index=[0])    
+    data_panda.to_excel(writer, sheet_name = 'experiment '+str(number_experiment+1),index=False)
+    writer.save()
+    writer.close()
+
+    return accuracy, false_accuracy, time_lasso_algorithm
+
+
+ 
+
+accuracy_list = []
+false_accuracy_list = []
+time_limit_list = []
+
+workbook = xlsxwriter.Workbook(folder_path+r'\com_lasso_'+str(p_value)+'_'+str(reg_value)+'_'+str(n_value)+'.xlsx')
+workbook.close()
+
+
+  
+
+for count in range(amount_experiments):
+    diccionario = np.load(folder_path+r'\matrix '+str(count+1)+'.npy')
+    Y = np.load(folder_path+r'\respond_vector '+str(count+1)+'.npy')
+    ss = np.load(folder_path+r'\warm_start '+str(count+1)+'.npy')
+    indices_selected = np.load(folder_path+r'\indices_selected '+str(count+1)+'.npy')
+    warm_start_information = np.load(folder_path+r'\reg_and_time_warm_start '+str(count+1)+'.npy')
+    reg = int(warm_start_information[0])
+    time_warm_start = warm_start_information[1]
+
+    n = np.shape(diccionario)[0]
+    p = np.shape(diccionario)[1]
+
+    constante = reg
+
+    gamma_steps = 10 
+    gamma_set = [2*g/(math.sqrt(n)*constante) for g in range(1,gamma_steps)]
+    answer = lasso_algorithm_comparing(diccionario,reg,Y,indices_selected,gamma_set,count)
+    
+    accuracy_list.append(answer[0])
+    false_accuracy_list.append(answer[1])
+    time_limit_list.append(answer[2])
+    
+
+accuracy_average = sum(accuracy_list[i] for i in range(len(accuracy_list)))/len(accuracy_list)
+time_algorithm_average = sum(time_limit_list[i] for i in range(len(time_limit_list)))/len(time_limit_list)
+false_accuracy_average = sum(false_accuracy_list[i] for i in range(len(false_accuracy_list)))/len(false_accuracy_list)
+
+path_data_file_global = folder_path+r'\com_lasso_'+str(p_value)+'_'+str(reg_value)+'_'+str(n_value)+'.xlsx'
+ExcelWorkbook = load_workbook(path_data_file_global)
+writer = pd.ExcelWriter(path_data_file_global, engine = 'openpyxl')
+writer.book = ExcelWorkbook
+data_panda_average = pd.DataFrame({'n':n,'Accuracy Lasso':accuracy_average,'False Accuracy Lasso': false_accuracy_average, 'Time Lasso':time_algorithm_average}, index=[0])    
+data_panda_average.to_excel(writer, sheet_name = 'Average',index=False)
+writer.save()
+writer.close()
+
+
+#############################################
+
+                #subset
+
+#############################################
+
+
+def subset_algorithm_comparing(diccionario: np.ndarray,reg: int, Y: np.ndarray, indices_selected: list, time_warm_start: np.ndarray , tao_set: list, time_limit_algorithm: float, number_experiment: int):
+
+    n = np.shape(diccionario)[0]
+    p = np.shape(diccionario)[1]
+
+    #Definición de función g y su gradiente (función a optimizar)
+
+    def g(z):
+        
+        return 1/2*((Y-diccionario.dot(np.array(z))).transpose().dot(Y-diccionario.dot(np.array(z)))) #función cuadrática
+        
+        
+    def gradg(z):
+        
+        return -diccionario.transpose().dot(Y-diccionario.dot(np.array(z)))                     # gradiente
+
+
+    def H(k,z):    # función que devuelve un vector que contiene solo las k entradas mayores de z (en valor absoluto) y anula el resto
+        
+        if type(k) != int or k < 1:
+            bb = 'k tiene que ser entero mayor a 0'
+        else:
+            I = []   # conjunto de índices
+
+        zz = copy.copy(z)
+
+        for i in range(len(z)):
+            if z[i] < 0:
+                zz[i] = -z[i]
+
+            for i in range(k):  #vamos a sacar los k índices con las entradas más altas
+                F = max(zz) #máximo actual
+
+                for j in range(len(z)):
+
+                        if zz[j] == F:
+                            I.append(j)  #añade nuevo índice
+                            zz[j] = 0    #cambia 
+                            break
+
+                bb = [0]*(len(z))   #vector respuesta
+
+            for i in I:
+                bb[i] = z[i]     # vector que solo guarda los valores de los índices hallados antes
+
+
+            return bb
+
+    def gred(z):         #resuelve el problema de optimización de la función g reducido al soporte del vector z
+        soporte_columnas = [i for i in range(p) if z[i] != 0.0]; #selecciona columnas para formar X_s (notación paper Bertsimas)
+
+        matriz_columnas_soporte = np.empty((n,len(soporte_columnas)), dtype = 'float', order='C')
+
+        for i in range(len(soporte_columnas)):
+            matriz_columnas_soporte[:,i] = diccionario[:,soporte_columnas[i]]    # X_s
+
+        zz = np.linalg.solve(matriz_columnas_soporte.transpose().dot(matriz_columnas_soporte), matriz_columnas_soporte.transpose().dot(Y))
+        beta_goal = np.array([0]*len(z), dtype= 'float64')    #según paper de Bertsimas (best subset selection)
+        tt = 0
+        for i in soporte_columnas:
+            beta_goal[i] = zz[tt]
+            tt += 1
+        
+        return beta_goal
+            
+            
+    def norm_x(k,z):               #variables: coeficiente de regresión, vector
+        if type(k) != int or k < 1:
+            bb = 'k tiene que ser entero mayor a 0'
+        else:
+            zz = copy.copy(z)
+            bz = [0]*k
+            for i in range(len(z)):
+                if z[i] < 0:
+                    zz[i] = -z[i]       #vector de los valores absolutos de z
+
+            for i in range(k):
+                F = max([zz[i] for i in range(len(z))])  #selecciona el máximo absoluto actual del vector
+                bz[i] = F         # guarda ese valor absoluto máximo
+                for j in range(len(z)):   #identifica la posición con el valor absoluto má´ximo y lo anula
+                    if zz[j] == F:
+                        zz[j] = 0.0
+                        break
+                    
+        return sum(bz[i] for i in range(k))   #devuelve la suma de los k valores absolutos mayores del vector z
+        
+
+    def e_vector(tamaño,indice):
+        arr = np.zeros(tamaño)
+        arr[indice] = 1
+        
+        return arr
+
+
+    accuracy = 0
+    indices_solution = []
+    tao_selected = 0
+    time_algorithm = copy.copy(time_limit_algorithm)
+    for tao in tao_set:
+        #modelo MIO para hallar el mejor subset con paramétro betafinal
+                                              
+        MU= tao*max([ abs(vector_warm_start[i]) for i in range(p)])        # cota mu_U
+
+        ML = reg*MU                                                # cota mu_L
+
+        MUZ = max([norm_x(reg,diccionario[i]) for i in range(n)])* MU          # cota mu_U^Z
+
+        MLZ = min([sum(max([abs(diccionario[i][j]) for j in range(p)]) for i in range(n))*ML, math.sqrt(reg)*np.linalg.norm(Y)])# cota mu_L^Z
+
+        print('La constante MU es igual a '+str(MU))
+        print('La constante ML es igual a '+str(ML))
+        print('La constante MUZ es igual a '+str(MUZ))
+        print('La constante MLZ es igual a '+str(MLZ))
+
+
+        t = 0 #número iteración
+
+        # variables del modelo (nombres sacados de paper Bertsimats 'best subset selection')
+        ss = Model("subset") #nombre modelo
+        z = ss.addVars(p, vtype=GRB.BINARY)#variables binarias 
+        z_2 = ss.addVars(p, vtype=GRB.BINARY)#variables binarias auxiliares para hacer SOS constraint
+        b = ss.addVars(p, lb=-GRB.INFINITY, vtype=GRB.CONTINUOUS)
+        b_abs = ss.addVars(p, vtype=GRB.CONTINUOUS) #valores absolutos de las variables b
+        #b_2 = ss.addVars(p,lb=-GRB.INFINITY, vtype=GRB.CONTINUOUS)
+        zeta = ss.addVars(n, lb=-GRB.INFINITY, vtype=GRB.CONTINUOUS) #variable continua
+        zeta_abs = ss.addVars(n, vtype=GRB.CONTINUOUS)
+        b_vector = MVar([b[i] for i in range(p)])
+        b_abs_vector = MVar([b_abs[i] for i in range(p)])
+        z_vector = MVar([z[i] for i in range(p)])
+        zeta_vector = MVar([zeta[i] for i in range(n)])
+        zeta_abs_vector = MVar([zeta_abs[i] for i in range(n)])
+
+        ss.Params.timeLimit = time_limit_algorithm #Parámetro para limitar el tiempo del modelo
+
+        ss.update()
+
+
+        #Función objetivo
+
+        obj = QuadExpr()
+
+        obj = zeta_vector @  zeta_vector
+
+        obj *= 0.5
+
+        obj -= diccionario.transpose().dot(Y) @ b_vector
+
+        obj += 0.5*Y.dot(Y)
+
+        ss.setObjective(obj, GRB.MINIMIZE)
+
+
+
+        #restricciones del modelo
+        ss.addConstrs(b_abs[i] == abs_(b[i]) for i in range(p))
+        ss.addConstrs(zeta_abs[i] == abs_(zeta[i]) for i in range(n))
+
+        ss.addConstr( diccionario @ b_vector == zeta_vector ) #restricción sobre las zeta's en términos de dicc y b
+
+
+        ss.addConstrs( z_2[i] == 1-z[i] for i in range(p)) #restricciones variables binaria auxiliares para SOS-1
+
+        for i in range(p):
+            ss.addSOS(GRB.SOS_TYPE1, [b[i],z_2[i]]) #restricciones SOS-1
+
+        ss.addConstr( np.ones(p) @ z_vector <= reg) #restricción de regresión
+
+        ss.addConstrs(b[i] <= MU for i in range(p)) #restricciones de MU
+        ss.addConstrs( b[i] >= -MU for i in range(p)) #restricciones de MU
+
+        ss.addConstr( np.ones(p) @ b_abs_vector <= ML) #restricción de ML
+
+        ss.addConstrs(zeta[i] <= MUZ for i in range(n)) #restricciones de MUZ
+        ss.addConstrs(zeta[i] >= -MUZ for i in range(n)) #restricciones de MUZ
+
+        ss.addConstr( np.ones(n) @ zeta_abs_vector <= MLZ ) #restricción de MLZ
+
+
+        # comando solución
+        ss.update()
+        ss.optimize()
+        print(ss.status)
+        time_subset_temporal = ss.runtime
+        indices_solution_temporal = []
+        for i in range(p):
+            if z[i].x != 0.0:
+                indices_solution_temporal.append(i)
+        accuracy_temporal = 100*len(set(indices_selected) & set(indices_solution_temporal))/reg
+
+        if accuracy_temporal > accuracy:
+            accuracy = accuracy_temporal
+            indices_solution = indices_solution_temporal
+            tao_selected = tao
+            time_algorithm = time_subset_temporal
+            
+    print(indices_solution)        
+
+    path_data_file = folder_path+r'\com_subset_'+str(p)+'_'+str(reg)+'_'+str(n)+'.xlsx'
+    ExcelWorkbook = load_workbook(path_data_file)
+    writer = pd.ExcelWriter(path_data_file, engine = 'openpyxl')
+    writer.book = ExcelWorkbook
+    data_panda = pd.DataFrame({'n':n,'Accuracy C.P':accuracy, 'Time warm star':time_warm_start,'Time Subset':time_algorithm}, index=[0])    
+    data_panda.to_excel(writer, sheet_name = 'experiment '+str(number_experiment+1),index=False)
+    writer.save()
+    writer.close()
+
+    print('valor tao: '+str(tao_selected))
+
+    return accuracy, time_algorithm
+
+
+
+tao_set = [1.1,1.5,2]
+time_limit_algorithm = 300
+accuracy_list = []
+time_limit_list = []
+
+workbook = xlsxwriter.Workbook(folder_path+r'\com_subset_'+str(p_value)+'_'+str(reg_value)+'_'+str(n_value)+'.xlsx')
+workbook.close()
+
+for count in range(amount_experiments):
+    diccionario = np.load(folder_path+r'\matrix '+str(count+1)+'.npy')
+    Y = np.load(folder_path+r'\respond_vector '+str(count+1)+'.npy')
+    vector_warm_start = np.load(folder_path+r'\warm_start '+str(count+1)+'.npy')
+    indices_selected = np.load(folder_path+r'\indices_selected '+str(count+1)+'.npy')
+    warm_start_information = np.load(folder_path+r'\reg_and_time_warm_start '+str(count+1)+'.npy')
+    reg = int(warm_start_information[0])
+    time_warm_start = warm_start_information[1]
+
+    n = np.shape(diccionario)[0]
+    p = np.shape(diccionario)[1]
+
+
+    answer = subset_algorithm_comparing(diccionario,reg, Y, indices_selected, time_warm_start,tao_set,time_limit_algorithm,count)
+    
+    accuracy_list.append(answer[0])
+    time_limit_list.append(answer[1])
+
+
+
+
+accuracy_average = sum(accuracy_list[i] for i in range(len(accuracy_list)))/len(accuracy_list)
+time_algorithm_average = sum(time_limit_list[i] for i in range(len(time_limit_list)))/len(time_limit_list)
+
+
+path_data_file_global = folder_path+r'\com_subset_'+str(p_value)+'_'+str(reg_value)+'_'+str(n_value)+'.xlsx'
+ExcelWorkbook = load_workbook(path_data_file_global)
+writer = pd.ExcelWriter(path_data_file_global, engine = 'openpyxl')
+writer.book = ExcelWorkbook
+data_panda_average = pd.DataFrame({'n':n,'Accuracy Subset':accuracy_average, 'Time Subset':time_algorithm_average}, index=[0])    
+data_panda_average.to_excel(writer, sheet_name = 'Average',index=False)
+writer.save()
+writer.close()
+
+
+
+
+
+####################### Input for the algorithm ##########################
+
+p = copy.copy(p_value) #size of columns
+reg = copy.copy(reg_value)   #size of support regressor
+n = copy.copy(n_value)   #size of rows
+
+
+
+##########################################################################3
+
+
+
+data_cp = pd.read_excel (folder_path+r'\com_cp_'+str(p)+'_'+str(reg)+'_'+str(n)+'.xlsx', sheet_name = 'Average')
+data_lasso = pd.read_excel (folder_path+r'\com_lasso_'+str(p)+'_'+str(reg)+'_'+str(n)+'.xlsx', sheet_name = 'Average')
+data_subset = pd.read_excel (folder_path+r'\com_subset_'+str(p)+'_'+str(reg)+'_'+str(n)+'.xlsx', sheet_name = 'Average')
+
+accuracy_cp = round(data_cp['Accuracy C.P'][0],2)
+accuracy_lasso = round(data_lasso['Accuracy Lasso'][0],2)
+accuracy_subset = round(data_subset['Accuracy Subset'][0],2)
+false_accuracy_lasso = round(data_lasso['False Accuracy Lasso'][0],2)
+time_cp = round(data_cp['Time C.P'][0],2)
+time_lasso = round(data_lasso['Time Lasso'][0],2)
+time_subset = round(data_subset['Time Subset'][0],2)
+
+names = ['C.P', 'Lasso', 'B.S']
+accuracy = [accuracy_cp, accuracy_lasso, accuracy_subset]
+false_accuracy = [100.0-accuracy_cp,false_accuracy_lasso,100.0-accuracy_subset]
+Times = [time_cp,time_lasso,time_subset]
+
+for i in range(len(accuracy)):
+    if accuracy[i] == 0.0:
+        accuracy[i] = 0.25
+
+for i in range(len(false_accuracy)):
+    if false_accuracy[i] == 0.0:
+        false_accuracy[i] = 0.25    
+
+
+X = np.array([1,3.5,6])
+
+plt.figure(figsize=(12, 5))
+plt.subplot(131)
+plt.ylabel('A (%)')
+plt.xticks([1.47,4,6.5], names)
+Width = 1
+
+bars = plt.bar(X, accuracy, color = 'darkblue', width = Width, label='A %')
+for bar in bars:
+    yval = bar.get_height()
+    if yval == 0.25:
+        yval = 0.0
+    plt.text(bar.get_x()+0.01, yval + .005, yval)
+bars = plt.bar(X + Width, false_accuracy, color = 'darkred', width = Width, label='F %')
+for bar in bars:
+    yval = bar.get_height()
+    if yval == 0.25:
+        yval = 0.0
+    plt.text(bar.get_x()+0.01, yval + .005, yval)
+# Creating the legend of the bars in the plot
+plt.legend(title= 'Legend', title_fontsize = 15,  prop = {'size' : 13}, bbox_to_anchor= (1.02, 1))
+# Namimg the x and y axis
+plt.xlabel('Algorithms')
+plt.ylabel('Percentage (%)')
+plt.ylim(0,105)
+plt.subplot(133)
+plt.xlabel('Algorithms')
+plt.ylabel('Time (s)')
+bars = plt.bar(names, Times, color = 'darkgreen')
+for bar in bars:
+    yval = bar.get_height()
+    plt.text(bar.get_x()+0.2, yval + .005, yval)
+
+plt.suptitle('Case (p,k,n)=('+str(p)+','+str(reg)+','+str(n)+')')
+plt.savefig(folder_path+r'\figure '+str(p)+' '+str(reg)+' '+str(n)+'.png')

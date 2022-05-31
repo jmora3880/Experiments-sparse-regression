@@ -476,7 +476,7 @@ amount_experiments = 5   # the number of experiments we want to try. The algorit
 time_limit_algorithm = 60 # the limit running time (in seconds) for the cp algorithm in each experiment
 
 p_value = 1000           # number of columns for the matrix
-reg_value = 10           # the size of the support regressor 
+reg_value = 10           # size of the support of the regressor 
 
 # inputs for the range of the size of rows for the matrices 
 
