@@ -1,0 +1,294 @@
+from cmath import sqrt
+from gurobipy import *
+import numpy as np
+import math
+import pandas as pd
+import random
+import copy
+import xlsxwriter
+from openpyxl import load_workbook
+import matplotlib.pyplot as plt
+
+
+def matriz_generator(p: int,reg: int, n: int, folder_path_temporal_data: str):
+
+       # función que centra y escala matrices
+    def function_center_scale(z: np.ndarray) -> np.ndarray:
+        Size = z.shape 
+        if np.size(Size) == 1:
+            media = np.sum(z)/Size[0]
+            for i in range(Size[0]):
+                z[i] = z[i] - media
+            scala = np.linalg.norm(z,2)
+            for i in range(Size[0]):
+                z[i] = z[i]/scala
+        else:
+            for i in range(Size[1]):
+                media = np.sum(z[:,i])/Size[0]
+                for j in range(Size[0]):
+                    z[j,i] = z[j,i] - media
+                scala = np.linalg.norm(z[:,i],2)
+                for j in range(Size[0]):
+                    z[j,i] = z[j,i]/scala
+
+        return z
+
+    def least_square(z: np.ndarray):
+        
+        return np.inner(Y-diccionario.dot(z),Y-diccionario.dot(z))
+
+
+    # Función que selecciona aleatoriamente 'k' columnas y genera vector como combinación lineal (binaria) de estos
+    def respond_vector_generator(X: np.ndarray, k: int) -> np.ndarray:
+        Size = X.shape
+        dim_colums = Size[1]
+        indice_colums_selected = random.sample(range(dim_colums),k)
+        respond_vector = sum(random.choice([-1,1])*X[:,indice_colums_selected[i]] for i in range(k))
+        return respond_vector, indice_colums_selected, k
+
+    def gred(z):         #resuelve el problema de optimización de la función g reducido al soporte del vector z
+        soporte_columnas = [i for i in range(p) if z[i] != 0.0]; #selecciona columnas para formar X_s (notación paper Bertsimas)
+
+        matriz_columnas_soporte = np.empty((n,len(soporte_columnas)), dtype = 'float', order='C')
+
+        for i in range(len(soporte_columnas)):
+            matriz_columnas_soporte[:,i] = diccionario[:,soporte_columnas[i]]    # X_s
+
+        zz = np.linalg.solve(matriz_columnas_soporte.transpose().dot(matriz_columnas_soporte), matriz_columnas_soporte.transpose().dot(Y))
+        beta_goal = np.array([0]*len(z), dtype= 'float64')    #según paper de Bertsimas (best subset selection)
+        tt = 0
+        for i in soporte_columnas:
+            beta_goal[i] = zz[tt]
+            tt += 1
+        
+        return beta_goal
+
+    def H(k,z):    # función que devuelve un vector que contiene solo las k entradas mayores de z (en valor absoluto) y anula el resto
+        
+        if type(k) != int or k < 1:
+            bb = 'k tiene que ser entero mayor a 0'
+        else:
+            I = []   # conjunto de índices
+
+        zz = copy.copy(z)
+
+        for i in range(len(z)):
+            if z[i] < 0:
+                zz[i] = -z[i]
+
+            for i in range(k):  #vamos a sacar los k índices con las entradas más altas
+                F = max(zz) #máximo actual
+
+                for j in range(len(z)):
+
+                        if zz[j] == F:
+                            I.append(j)  #añade nuevo índice
+                            zz[j] = 0    #cambia 
+                            break
+
+                bb = [0]*(len(z))   #vector respuesta
+
+            for i in I:
+                bb[i] = z[i]     # vector que solo guarda los valores de los índices hallados antes
+
+
+            return bb
+
+    def gradg(z):
+        
+        return -diccionario.transpose().dot(Y-diccionario.dot(np.array(z)))                     # gradiente
+
+
+
+
+    diccionario = np.empty((n,p),dtype='float')
+
+    diccionario = np.random.rand(n,p)
+    diccionario = function_center_scale(diccionario)
+    data_random = respond_vector_generator(diccionario,reg)
+    Y = data_random[0]                                 #generación del vector Y
+
+    #indices_selected.append(data_random[1])
+
+    np.save(folder_path_temporal_data+r'\phase_matrix',diccionario)
+    np.save(folder_path_temporal_data+r'\phase_respond_vector',Y)
+    np.save(folder_path_temporal_data+r'\phase_indices_selected',data_random[1])
+
+
+
+
+def lasso_algorithm_phase(diccionario: np.ndarray,reg: int, Y: np.ndarray, indices_selected: list, gamma_set: list,number_experiment: int):
+    n = np.shape(diccionario)[0]
+    p = np.shape(diccionario)[1]
+    
+    accuracy = 0
+    indices_solution = []
+    
+            #nombre modelo
+
+    for Lambda in gamma_set:
+
+        las = Model("Lasso")
+
+        #varibles
+        z = las.addMVar(p, lb=-GRB.INFINITY, vtype=GRB.CONTINUOUS)
+        t = las.addMVar(p, vtype=GRB.CONTINUOUS)
+
+        las.params.Method = 1
+        las.params.Threads = 1
+
+        las.update()
+
+        #Función objetivo
+
+        obj = MQuadExpr()
+
+        obj = z @ diccionario.transpose().dot(diccionario) @ z 
+
+        obj *= 1/2
+
+        obj -= Y.transpose().dot(diccionario) @ z
+
+        obj += np.array([Lambda for i in range(p)]) @ t
+
+        obj += 1/2*Y.dot(Y)
+
+        las.setObjective(obj, GRB.MINIMIZE)
+
+
+        #restricciones
+        las.addConstrs( z[i] <= t[i] for i in range(p))
+        las.addConstrs( -z[i] <= t[i] for i in range(p))
+            
+        #las.addConstr( np.ones(p) @ t <= MU)
+
+
+        # comando solución
+        las.update()
+        las.optimize()
+        print(las.status)
+        time_lasso_temporal = las.runtime
+
+        indices_solution_temporal = []
+        entry_solution = []
+        for i in range(p):
+            if z.x[i] != 0.0:
+                indices_solution_temporal.append(i)
+                entry_solution.append(z.x[i])
+        accuracy_temporal = 100*len(set(indices_selected) & set(indices_solution_temporal))/reg
+        false_accuracy_temporal = 100*len(set(indices_solution_temporal).difference(set(indices_selected)))/len(indices_solution_temporal)
+        if accuracy_temporal > accuracy: 
+            accuracy = accuracy_temporal
+            indices_solution = indices_solution_temporal
+            Lambda_selected = Lambda
+            time_lasso_algorithm = time_lasso_temporal
+            false_accuracy = false_accuracy_temporal
+
+        if accuracy_temporal == accuracy and false_accuracy_temporal < false_accuracy:
+            accuracy = accuracy_temporal
+            indices_solution = indices_solution_temporal
+            Lambda_selected = Lambda
+            time_lasso_algorithm = time_lasso_temporal
+            false_accuracy = false_accuracy_temporal
+
+
+    print(indices_solution)
+    print('valor lambda: '+str(Lambda_selected))
+
+
+    path_data_file = path_file_lasso_data+r'\phase_lasso '+str(p_value)+' '+str(reg_value)+' '+str(n_min)+'_'+str(n_max)+'.xlsx'
+    ExcelWorkbook = load_workbook(path_data_file)
+    writer = pd.ExcelWriter(path_data_file, engine = 'openpyxl')
+    writer.book = ExcelWorkbook
+    data_panda = pd.DataFrame({'n':n,'Accuracy Lasso':accuracy, 'False Accuracy Lasso':false_accuracy,'Time Lasso':time_lasso_algorithm}, index=[0])    
+    data_panda.to_excel(writer, sheet_name = 'experiment '+str(number_experiment+1),index=False)
+    writer.save()
+    writer.close()
+
+    return accuracy, false_accuracy, time_lasso_algorithm
+
+
+
+
+
+def experiments_phase_Lasso(amount_experiments: int, p_value: int, reg_value: int, n_min: int, n_max: int, step: int, folder_path_temporal_data: str,path_file_lasso_data: str):
+    accuracy_values = []
+    time_running_values = []
+    false_accuracy_values = []
+    n_values_list = range(n_min,n_max+1,step)
+
+
+    workbook = xlsxwriter.Workbook(path_file_lasso_data+r'\phase_lasso '+str(p_value)+' '+str(reg_value)+' '+str(n_min)+'_'+str(n_max)+'.xlsx')
+    workbook.close()
+
+    for n_value in n_values_list:
+        accuracy_values_accumulated = []
+        running_time_accumulated = []
+        false_accuracy_values_accumulated = []
+
+
+        for count in range(amount_experiments):
+
+            #amount_warm_start_options = 10
+            #time_limit_warm_start = 120
+            matriz_generator(p_value,reg_value,n_value,folder_path_temporal_data)
+            diccionario = np.load(folder_path_temporal_data+r'\phase_matrix.npy')
+            Y = np.load(folder_path_temporal_data+r'\phase_respond_vector.npy')
+            indices_selected = np.load(folder_path_temporal_data+r'\phase_indices_selected.npy')
+            reg = copy.copy(reg_value)
+            n = np.shape(diccionario)[0]
+            p = np.shape(diccionario)[1]
+
+            constante = reg
+
+            gamma_steps = 10 
+            gamma_set = [2*g/(math.sqrt(n)*constante) for g in range(1,gamma_steps)]
+            answer = lasso_algorithm_phase(diccionario,reg, Y, indices_selected,gamma_set,count)
+            accuracy_values_accumulated.append(answer[0])
+            false_accuracy_values_accumulated.append(answer[1])
+            running_time_accumulated.append(answer[2])
+
+        accuracy_values.append(sum(accuracy_values_accumulated[i] for i in range(len(accuracy_values_accumulated)))/len(accuracy_values_accumulated))
+        time_running_values.append(sum(running_time_accumulated[i] for i in range(len(running_time_accumulated)))/len(running_time_accumulated))
+        false_accuracy_values.append(sum(false_accuracy_values_accumulated[i] for i in range(len(false_accuracy_values_accumulated)))/len(false_accuracy_values_accumulated))
+        
+
+    data_graphic = pd.DataFrame({'n':n_values_list,'Accuracy Lasso':accuracy_values, 'False accuracy Lasso':false_accuracy_values,'Time Lasso':time_running_values})
+
+    data_graphic.to_excel(path_file_lasso_data+r'\datos grafica lasso '+str(p_value)+' '+str(reg_value)+' '+str(n_min)+'_'+str(n_max)+'.xlsx', sheet_name='sheet1', index=False)
+
+    plt.figure(1)
+    plt.plot(n_values_list,accuracy_values,'ro')
+    plt.xlabel('n')
+    plt.ylabel('A (%)')
+    plt.savefig(path_file_lasso_data+r'\lasso phase transition '+str(p_value)+' '+str(reg_value)+' '+str(n_min)+'_'+str(n_max)+'.png')
+
+
+    plt.figure(2)
+    plt.plot(n_values_list,time_running_values,'ro')
+    plt.xlabel('n')
+    plt.ylabel('Time (s)')
+    plt.savefig(path_file_lasso_data+r'\lasso complex transition '+str(p_value)+' '+str(reg_value)+' '+str(n_min)+'_'+str(n_max)+'.png')    
+
+
+
+
+# input data for the experiments
+
+amount_experiments = 1   # the number of experiments we want to try. The algorithm will display the average of all the experiments
+p_value = 1000           # number of columns for the matrix
+reg_value = 10           # the size of the support regressor 
+
+
+# inputs for the range of the size of rows for the matrices 
+
+n_min =160     # the minimum size of rows            
+n_max = 200    # the maximum size of rows
+step = 10      # the size step through the range of n
+
+# The folder_path where the temporal information and the outcome data is storage (the folder needs to be already created before running the algorithm)
+folder_path_temporal_data = r'D:\presentaciondata'
+path_file_lasso_data = r'D:\presentaciondata'
+
+
+experiments_phase_Lasso(amount_experiments,p_value,reg_value,n_min,n_max,step,r'D:\presentaciondata', r'D:\presentaciondata') 
